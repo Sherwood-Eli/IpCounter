@@ -63,8 +63,7 @@ if (ips.length != 0) {
 const IP_BACKGROUND_FETCH= 'background-fetch';
 
 TaskManager.defineTask(IP_BACKGROUND_FETCH, async () => {
-  console.log("background fetch active");
-  stats.num_pchecks++;
+  //console.log("background fetch active");
   await checkIPAddressChange(P);
 
   EventRegister.emit("background_execution", stats);
@@ -104,7 +103,13 @@ const checkIPAddressChange = async (check_type: number) => {
     }
 
   }
-  console.log("saving stats");
+  //console.log("saving stats");
+
+  if (check_type == P) {
+    stats.num_pchecks++;
+  } else {
+    stats.num_echecks++;
+  }
   saveStats(db, stats);
 };
 
@@ -125,16 +130,17 @@ export default function Index() {
     // Monitor network status and IP address changes
     const unsubscribe = NetInfo.addEventListener(async state => {
       if (state.isConnected) {
-        console.log("network event");
         await checkIPAddressChange(E);
-        setNumEchecks(++stats.num_echecks);
+        setNumEchecks(stats.num_echecks);
+        setNumEchanges(stats.num_echanges);
+
       }
     });
     return() => {
       EventRegister.removeEventListener(eventListener as string);
       unsubscribe();
     }
-  }, );
+  }, []);
 
   return (
     <View style={{flex:1}}>
