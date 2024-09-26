@@ -1,16 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, StyleSheet } from 'react-native';
+// DOWE need both of these network packages?
 import NetInfo from '@react-native-community/netinfo';
 import { NetworkInfo } from 'react-native-network-info';
 import moment from 'moment';
+import * as BackgroundFetch from 'expo-background-fetch';
+import * as TaskManager from 'expo-task-manager';
+import {EventRegister} from 'react-native-event-listeners';
 
 import { getDBConnection, createTables, getStats, getIps, insertIp, saveStats, dropTable, Stat, IPdata} from './db';
 
-const p = 0;
-const e = 1;
+// constants for knowing if something is periodic or event driven
+const P = 0;
+const E = 1;
 
-
-
+//create style sheets for view styling
 const styles = StyleSheet.create({
   stat: {
     textAlign: 'center'
@@ -31,96 +35,109 @@ const styles = StyleSheet.create({
   }
 });
 
+//defintion of an IP component for ip history view
 const IP = (data: IPdata) => (
   <View style={styles.ip}>
     <Text style={{fontSize:32}}>{data.ip}</Text>
     <Text>{data.date}</Text>
-    <Text style={{textAlign:'center', marginTop:5, fontWeight:'bold'}}>Change detected by: {data.change_type==p ? "periodic" : "event-driven"} check</Text>
+    <Text style={{textAlign:'center', marginTop:5, fontWeight:'bold'}}>Change detected by: {data.change_type==P ? "periodic" : "event-driven"} check</Text>
   </View>
 );
 
-//initialize some variables
 //intitialize db
 const db = getDBConnection();
 //dropTable(db, "ips");
+//dropTable(db, "stats");
+
 createTables(db);
 
 const stats: Stat = getStats(db) as Stat;  
-const ips: Array<IPdata> = getIps(db) as Array<IPdata>;
-
-/* logs all ip addresses
-ips.forEach((row: any) => {
-  console.log(row.ip, row.date);
-}
-)
-
-console.log(ips);
-console.log(stats);
-*/
+const ips: Array<IPdata> = (getIps(db) as Array<IPdata>).reverse();
 
 let ipAddress: string | null = null;
 if (ips.length != 0) {
-  ipAddress = ips[ips.length-1].ip;
+  ipAddress = ips[0].ip;
 }
 
+//set up background fetch
+const IP_BACKGROUND_FETCH= 'background-fetch';
 
-export default function Index() {
+TaskManager.defineTask(IP_BACKGROUND_FETCH, async () => {
+  console.log("background fetch active");
+  stats.num_pchecks++;
+  await checkIPAddressChange(P);
+
+  EventRegister.emit("background_execution", stats);
+  return BackgroundFetch.BackgroundFetchResult.NewData;
+});
+
+function registerBackgroundFetch() {
+  return BackgroundFetch.registerTaskAsync(IP_BACKGROUND_FETCH, {
+    minimumInterval: 60 * 10, // 10 minutes
+    stopOnTerminate: false, // android only,
+    startOnBoot: true, // android only
+  });
+}
+
+registerBackgroundFetch();
+
+// function for checking if ip address changed
+const checkIPAddressChange = async (check_type: number) => {
+  const currentIp = await NetworkInfo.getIPV4Address();
+
+  if (currentIp !== ipAddress) {
+    //let previousIpAddress = ipAddress;
+    ipAddress = currentIp;
+
+
+    const date = moment().utcOffset('08:00').format('YYYY-MM-DD hh:mm:ss a');
+    //console.log(`IP Address changed from ${previousIpAddress} to ${ipAddress} with ${stats.num_pchecks+stats.num_echecks} checks`);
+
+    let newIp: IPdata = {ip: ipAddress as string, date: date, change_type: check_type}
+    insertIp(db, newIp);
+    ips.unshift(newIp);
+
+    if (check_type == P) {
+      stats.num_pchanges++;
+    } else {
+      stats.num_echanges++;
+    }
+
+  }
+  console.log("saving stats");
+  saveStats(db, stats);
+};
+
+
+export default function Index() { 
   const [pChecks, setNumPchecks] = useState(stats.num_pchecks);
   const [eChecks, setNumEchecks] = useState(stats.num_echecks);
   const [pChanges, setNumPchanges] = useState(stats.num_pchanges);
   const [eChanges, setNumEchanges] = useState(stats.num_echanges);
 
-
   useEffect(() => {
+    // Recieves updates from background if background execution happens
+    const eventListener: string | boolean = EventRegister.addEventListener('background_execution', (stats: Stat) => {
+      setNumPchanges(stats.num_pchanges);
+      setNumPchecks(stats.num_pchecks);
+    });
+    
     // Monitor network status and IP address changes
-    const unsubscribe = NetInfo.addEventListener(state => {
+    const unsubscribe = NetInfo.addEventListener(async state => {
       if (state.isConnected) {
+        console.log("network event");
+        await checkIPAddressChange(E);
         setNumEchecks(++stats.num_echecks);
-        checkIPAddressChange(e);
       }
     });
-
-    // Optional: Check IP address periodically (e.g., every 10 seconds)
-    const intervalId = setInterval(() => {
-      setNumPchecks(++stats.num_pchecks);
-      checkIPAddressChange(p);
-    }, 10000); // 10,000ms = 10 seconds
-
-    // Clean up
-    return () => {
+    return() => {
+      EventRegister.removeEventListener(eventListener as string);
       unsubscribe();
-      clearInterval(intervalId);
-    };
-  }, []);
-
-  const checkIPAddressChange = async (check_type: number) => {
-    const currentIp = await NetworkInfo.getIPV4Address();
-
-    if (currentIp !== ipAddress) {
-      let previousIpAddress = ipAddress;
-      ipAddress = currentIp;
-
-      const date = moment().utcOffset('08:00').format('YYYY-MM-DD hh:mm:ss a');
-      console.log(`IP Address changed from ${previousIpAddress} to ${ipAddress} with ${stats.num_pchecks+stats.num_echecks} checks`);
-
-      let newIp: IPdata = {ip: ipAddress as string, date: date, change_type: check_type == p ? p : e}
-      insertIp(db, newIp);
-      ips.push(newIp);
-
-      if (check_type == p) {
-        setNumPchanges(++stats.num_pchanges);
-      } else {
-        setNumEchanges(++stats.num_echanges);
-      }
-
-    } else {
-      console.log('IP Address has not changed. ' + (stats.num_pchecks+stats.num_echecks));
     }
-    saveStats(db, stats);
-  };
+  }, );
 
   return (
-    <View>
+    <View style={{flex:1}}>
       <View style={styles.stats}>
         <Text style={styles.stat}>Number of periodic checks: {pChecks}</Text>
         <Text style={styles.stat}>Number of event-driven checks: {eChecks}</Text>
@@ -128,12 +145,13 @@ export default function Index() {
         <Text style={styles.stat}>Number of event-driven changes: {eChanges}</Text>
         <Text style={[styles.stat, {margin:5, backgroundColor:'#c6cd55', fontSize: 25}]}>Current IP: {ipAddress}</Text>
       </View>
-      <View style={[styles.stats, {marginTop: 20}]}>
+      <View style={[styles.stats, {marginVertical: 20, flexShrink:1}]}>
         <Text style={{fontSize:20, textAlign:'center', marginBottom: 10}}>IP History:</Text>
         <FlatList
           data={ips}
           renderItem={({item}) => <IP ip={item.ip} date={item.date} change_type={item.change_type}/>}
           keyExtractor={item => item.date}
+          style={{borderRadius:15}}
         />
       </View>
     </View>

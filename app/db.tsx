@@ -1,7 +1,7 @@
 import {openDatabaseSync, SQLiteDatabase} from 'expo-sqlite';
 
 export type IPdata = {ip: string, date: string, change_type: number};
-export type Stat = {num_pchecks: number, num_echecks: number, num_echanges: number, num_pchanges: number}
+export type Stat = {id: number, num_pchecks: number, num_echecks: number, num_echanges: number, num_pchanges: number}
 
 //TODO db.execAsync does not protect against sql injections
 
@@ -54,7 +54,7 @@ export const getStats = (db: SQLiteDatabase) => {
   try {
     let stats: Stat = db.getFirstSync(getStats) as Stat;
     if (stats == null) {
-      stats = {num_pchecks: 0, num_echecks: 0, num_echanges: 0, num_pchanges: 0} 
+      stats = {id: 1, num_pchecks: 0, num_echecks: 0, num_echanges: 0, num_pchanges: 0} 
       saveStats(db, stats);
     }
     return stats;
